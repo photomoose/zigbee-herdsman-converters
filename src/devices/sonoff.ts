@@ -457,7 +457,7 @@ const definitions: Definition[] = [
             e.battery(),
             e.battery_low(),
             e.child_lock().setAccess('state', ea.ALL),
-            e.open_window()
+            e.window_detection()
                 .withLabel('Open window detection')
                 .withDescription('Automatically turns off the radiator when local temperature drops by more than 1.5°C in 4.5 minutes.')
                 .withAccess(ea.ALL),
