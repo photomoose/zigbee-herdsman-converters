@@ -5,11 +5,13 @@ import * as constants from '../lib/constants';
 import * as reporting from '../lib/reporting';
 import extend from '../lib/extend';
 import * as modernExtend from '../lib/modernExtend';
-import {Definition, Fz, KeyValue} from '../lib/types';
+import {Definition, Fz, KeyValue, ModernExtend, Tz} from '../lib/types';
 
 const e = exposes.presets;
 const ea = exposes.access;
 import * as ota from '../lib/ota';
+import {assertNumber, isString} from "../lib/utils";
+import {access, Numeric} from "../lib/exposes";
 
 const fzLocal = {
     router_config: {
@@ -22,6 +24,53 @@ const fzLocal = {
             }
         },
     } satisfies Fz.Converter,
+};
+
+const sonoffModernExtend = {
+    trv_fault_code(args: { name: string, description: string, cluster: string | number,
+        attribute: string | {id: number, type: number} }): ModernExtend {
+        const {name, description, cluster, attribute} = args;
+        const attributeKey = isString(attribute) ? attribute : attribute.id;
+
+        const expose = new Numeric(name, access.STATE_GET).withDescription(description);
+
+        const fromZigbee: Fz.Converter[] = [{
+            cluster: cluster.toString(),
+            type: ['attributeReport', 'readResponse'],
+            convert: (model, msg, publish, options, meta) => {
+                if (attributeKey in msg.data) {
+                    let value = msg.data[attributeKey];
+                    assertNumber(value);
+
+                    const tag = value & 0xFF;
+                    if (tag !== 0x01) {
+                        throw new Error(`Invalid TLV tag value '${tag}' ` +
+                            `for thermostatic valve fault characteristic; expected tag 0x01.`);
+                    }
+
+                    const length = (value >> 8) & 0xFF;
+                    if (length !== 0x02) {
+                        throw new Error(`Invalid length '${length}' ` +
+                            `for thermostatic valve fault characteristic; expected length to be 2 bytes.`);
+                    }
+
+                    value = (value >> 16) & 0xFFFF;
+
+                    return {[expose.property]: value};
+                }
+            },
+        }];
+
+        const toZigbee: Tz.Converter[] = [{
+            key: [name],
+            convertGet: async (entity, key, meta) => {
+                // @ts-expect-error TODO fix zh type
+                await entity.read(cluster, [attributeKey]);
+            },
+        }];
+
+        return {exposes: [expose], fromZigbee, toZigbee, isModernExtend: true};
+    },
 };
 
 const definitions: Definition[] = [
@@ -395,6 +444,12 @@ const definitions: Definition[] = [
                 valueOn: ['LOCK', 0x01],
                 valueOff: ['UNLOCK', 0x00],
             }),
+            sonoffModernExtend.trv_fault_code({
+                name: 'fault_code',
+                cluster: 0xFC11,
+                attribute: {id: 0x0010, type: 0x23},
+                description: 'Thermostatic valve fault code',
+            }),
             modernExtend.binary({
                 name: 'open_window',
                 cluster: 0xFC11,
@@ -461,7 +516,7 @@ const definitions: Definition[] = [
             await reporting.thermostatOccupiedHeatingSetpoint(endpoint);
             await reporting.thermostatSystemMode(endpoint);
             await endpoint.read('hvacThermostat', ['localTemperatureCalibration']);
-            await endpoint.read(0xFC11, [0x0000, 0x6000, 0x6002]);
+            await endpoint.read(0xFC11, [0x0000, 0x0010, 0x6000, 0x6002]);
         },
     },
 ];
